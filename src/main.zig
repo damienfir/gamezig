@@ -103,8 +103,16 @@ fn div(v: Vec3, a: f32) Vec3 {
     return Vec3.init(v.x / a, v.y / a, v.z / a);
 }
 
+fn add(a: Vec3, b: Vec3) Vec3 {
+    return Vec3.init(a.x + b.x, a.y + b.y, a.z + b.z);
+}
+
 fn sub(a: Vec3, b: Vec3) Vec3 {
     return Vec3.init(a.x - b.x, a.y - b.y, a.z - b.z);
+}
+
+fn scale(a: Vec3, f: f32) Vec3 {
+    return Vec3.init(a.x * f, a.y * f, a.z * f);
 }
 
 fn cross(a: Vec3, b: Vec3) Vec3 {
@@ -271,28 +279,22 @@ const Axes = struct {
         const n: c_int = @intCast(c_int, self.n_elements_per_axis);
         c.glPointSize(10);
 
-        const projection = Mat4.perpective(0.1, 100.0, 0.05, 0.05 / window_ratio);
-        const position = Vec3.init(1, 4, 10);
-        const direction = normalize(Vec3.init(-0, -0.2, -1));
-        const up = Vec3.init(0, 1, 0);
-        const view = Mat4.lookat(position, direction, up);
-
         // set color, matrices
         try self.shader.set_vec3("color", &[_]f32{ 1, 0, 0 });
-        try self.shader.set_mat4("projection", &projection);
-        try self.shader.set_mat4("view", &view);
+        try self.shader.set_mat4("projection", &camera.projection);
+        try self.shader.set_mat4("view", &camera.get_view());
         c.glDrawArrays(c.GL_POINTS, 0, n);
         c.glDrawArrays(c.GL_LINE_STRIP, 0, n);
 
         try self.shader.set_vec3("color", &[_]f32{ 0, 1, 0 });
-        try self.shader.set_mat4("projection", &projection);
-        try self.shader.set_mat4("view", &view);
+        try self.shader.set_mat4("projection", &camera.projection);
+        try self.shader.set_mat4("view", &camera.get_view());
         c.glDrawArrays(c.GL_POINTS, n, n * 2);
         c.glDrawArrays(c.GL_LINE_STRIP, n, n * 2);
 
         try self.shader.set_vec3("color", &[_]f32{ 0, 0, 1 });
-        try self.shader.set_mat4("projection", &projection);
-        try self.shader.set_mat4("view", &view);
+        try self.shader.set_mat4("projection", &camera.projection);
+        try self.shader.set_mat4("view", &camera.get_view());
         c.glDrawArrays(c.GL_POINTS, n * 2, n * 3);
         c.glDrawArrays(c.GL_LINE_STRIP, n * 2, n * 3);
     }
@@ -306,17 +308,140 @@ fn draw_cursor() void {
     c.glEnd();
 }
 
+const Camera = struct {
+    projection: Mat4,
+    position: Vec3,
+    direction: Vec3,
+    up: Vec3,
+    speed: f32,
+
+    fn init() Camera {
+        return Camera{ .projection = Mat4.perpective(0.1, 100.0, 0.05, 0.05 / window_ratio), .position = Vec3.init(1, 4, 10), .direction = normalize(Vec3.init(-0, -0.2, -1)), .up = Vec3.init(0, 1, 0), .speed = 5 };
+    }
+
+    fn get_view(self: *Camera) Mat4 {
+        return Mat4.lookat(self.position, add(self.position, self.direction), self.up);
+    }
+
+    fn get_horizontal_vector(self: *Camera) Vec3 {
+        return normalize(cross(self.direction, self.up));
+    }
+};
+
 var axes: Axes = undefined;
 
 fn draw() void {
+    c.glClearColor(0, 0, 0, 0);
+    c.glClear(c.GL_COLOR_BUFFER_BIT | c.GL_DEPTH_BUFFER_BIT);
     axes.draw();
     draw_cursor();
+}
+
+const Controls = struct { move_forwards: bool, move_backwards: bool, move_left: bool, move_right: bool };
+var controls: Controls = undefined;
+var camera = Camera.init();
+
+fn update(dt: f32) void {
+    var velocity = Vec3.init(0, 0, 0);
+    if (controls.move_forwards) {
+        velocity = add(velocity, camera.direction);
+    } else if (controls.move_backwards) {
+        velocity = sub(velocity, camera.direction);
+    }
+
+    if (controls.move_right) {
+        velocity = add(velocity, camera.get_horizontal_vector());
+    } else if (controls.move_left) {
+        velocity = sub(velocity, camera.get_horizontal_vector());
+    }
+
+    velocity = scale(velocity, camera.speed);
+
+    camera.position = add(camera.position, scale(velocity, dt));
 }
 
 fn glfw_key_callback(window: ?*c.GLFWwindow, key: c_int, scancode: c_int, action: c_int, mods: c_int) callconv(.C) void {
     if (key == c.GLFW_KEY_ESCAPE and action == c.GLFW_PRESS) {
         c.glfwSetWindowShouldClose(window, 1);
     }
+
+    if (key == c.GLFW_KEY_W) {
+        if (action == c.GLFW_PRESS) {
+            controls.move_backwards = false;
+            controls.move_forwards = true;
+        } else if (action == c.GLFW_RELEASE) {
+            controls.move_forwards = false;
+        }
+    }
+
+    if (key == c.GLFW_KEY_S) {
+        if (action == c.GLFW_PRESS) {
+            controls.move_forwards = false;
+            controls.move_backwards = true;
+        } else if (action == c.GLFW_RELEASE) {
+            controls.move_backwards = false;
+        }
+    }
+
+    if (key == c.GLFW_KEY_A) {
+        if (action == c.GLFW_PRESS) {
+            controls.move_right = false;
+            controls.move_left = true;
+        } else if (action == c.GLFW_RELEASE) {
+            controls.move_left = false;
+        }
+    }
+
+    if (key == c.GLFW_KEY_D) {
+        if (action == c.GLFW_PRESS) {
+            controls.move_left = false;
+            controls.move_right = true;
+        } else if (action == c.GLFW_RELEASE) {
+            controls.move_right = false;
+        }
+    }
+}
+
+fn Pair(comptime T: type) type {
+    return struct { a: T, b: T };
+}
+
+const Delta = struct {
+    prev_x: f32,
+    prev_y: f32,
+    already_moved: bool,
+
+    fn init() Delta {
+        return Delta{ .prev_x = 0, .prev_y = 0, .already_moved = false };
+    }
+
+    fn get_delta(self: *Delta, x: f32, y: f32) Pair(f32) {
+        if (!self.already_moved) {
+            self.already_moved = true;
+            self.prev_x = x;
+            self.prev_y = y;
+        }
+        const dx = x - self.prev_x;
+        const dy = y - self.prev_y;
+        self.prev_x = x;
+        self.prev_y = y;
+        return Pair(f32){ .a = dx, .b = dy };
+    }
+};
+
+var mouse_throttle: std.time.Timer = undefined;
+var mouse_delta = Delta.init();
+
+fn glfw_cursor_callback(window: ?*c.GLFWwindow, xpos: f64, ypos: f64) callconv(.C) void {
+    if (mouse_throttle.read() < @floatToInt(u64, (1.0 / 60.0) * 1e9)) {
+        return;
+    }
+    std.debug.print("Elapsed: {d:.3}\n", .{@intToFloat(f32, mouse_throttle.read()) / 1e9});
+    mouse_throttle.reset();
+
+    std.debug.print("Mouse position: ({d:.1} {d:.1})\n", .{ xpos, ypos });
+    const delta = mouse_delta.get_delta(@floatCast(f32, xpos), @floatCast(f32, ypos));
+    std.debug.print("Mouse delta: ({d:.1} {d:.1})\n", .{ delta.a, delta.b });
 }
 
 pub fn main() !void {
@@ -329,13 +454,21 @@ pub fn main() !void {
 
     _ = c.glfwSetKeyCallback(window, glfw_key_callback);
 
+    mouse_throttle = try std.time.Timer.start();
+    _ = c.glfwSetCursorPosCallback(window, glfw_cursor_callback);
+
     if (c.glfwRawMouseMotionSupported() != 0)
         c.glfwSetInputMode(window, c.GLFW_RAW_MOUSE_MOTION, c.GLFW_TRUE);
 
     // const shader = Shader{ .program = try compile("shaders/phong_vertex.glsl", "shaders/phong_fragment.glsl") };
     axes = try Axes.init();
 
+    var timer = try std.time.Timer.start();
+
     while (c.glfwWindowShouldClose(window) == 0) {
+        const dt = @intToFloat(f32, timer.lap()) / 1e9;
+        update(dt);
+
         draw();
 
         c.glfwSwapBuffers(window);
