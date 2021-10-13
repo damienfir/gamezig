@@ -44,7 +44,7 @@ const Grid = struct {
     fn world_from_point(self: Grid, p: Point) Vec3 {
         const x = @intToFloat(f32, p.x);
         const y = @intToFloat(f32, p.y);
-        return Vec3{ .x = x + 0.5, .y = 0, .z = y + 0.5 };
+        return Vec3{ .x = x, .y = 0, .z = y };
     }
 
     fn index_from_world(self: Grid, p: Vec3) u32 {
@@ -83,15 +83,15 @@ fn compute_normals(vertices: []Vec3) ![]Vec3 {
 
 fn floor_tile_mesh(width: f32, depth: f32) !Mesh {
     var mesh: Mesh = undefined;
-    const x = width / 2.0;
-    const z = -depth / 2.0;
+    const x = width;
+    const z = depth;
     mesh.vertices = try gpa.allocator.alloc(Vec3, 6);
-    mesh.vertices[0] = Vec3.init(-x, -0, -z);
-    mesh.vertices[1] = Vec3.init(x, -0, -z);
-    mesh.vertices[2] = Vec3.init(-x, -0, z);
-    mesh.vertices[3] = Vec3.init(-x, -0, z);
-    mesh.vertices[4] = Vec3.init(x, -0, -z);
-    mesh.vertices[5] = Vec3.init(x, -0, z);
+    mesh.vertices[0] = Vec3.init(0, 0, 0);
+    mesh.vertices[1] = Vec3.init(x, 0, 0);
+    mesh.vertices[2] = Vec3.init(0, 0, z);
+    mesh.vertices[3] = Vec3.init(0, 0, z);
+    mesh.vertices[4] = Vec3.init(x, 0, 0);
+    mesh.vertices[5] = Vec3.init(x, 0, z);
 
     mesh.normals = try compute_normals(mesh.vertices);
 
@@ -99,14 +99,14 @@ fn floor_tile_mesh(width: f32, depth: f32) !Mesh {
 }
 
 fn rectangle_mesh(width: f32, height: f32, depth: f32) !Mesh {
-    const v0 = Vec3.init(-0.5, -0.5, 0.5);
-    const v1 = Vec3.init(-0.5, -0.5, -0.5);
-    const v2 = Vec3.init(-0.5, 0.5, 0.5);
-    const v3 = Vec3.init(-0.5, 0.5, -0.5);
-    const v4 = Vec3.init(0.5, -0.5, 0.5);
-    const v5 = Vec3.init(0.5, -0.5, -0.5);
-    const v6 = Vec3.init(0.5, 0.5, 0.5);
-    const v7 = Vec3.init(0.5, 0.5, -0.5);
+    const v0 = Vec3.init(0, 0, depth);
+    const v1 = Vec3.init(0, 0, 0);
+    const v2 = Vec3.init(0, height, depth);
+    const v3 = Vec3.init(0, height, 0);
+    const v4 = Vec3.init(width, 0, depth);
+    const v5 = Vec3.init(width, 0, 0);
+    const v6 = Vec3.init(width, height, depth);
+    const v7 = Vec3.init(width, height, 0);
 
     var mesh: Mesh = undefined;
     mesh.vertices = try gpa.allocator.alloc(Vec3, 36);
@@ -318,8 +318,12 @@ fn init() !void {
     axes = try Axes.init();
 
     grid = try Grid.init(1, 2);
-    grid.entities[0] = try new_entity(try floor_tile_mesh(1, 1), grid.world_from_point(Grid.Point{ .x = 1, .y = 1 }));
-    grid.entities[1] = try new_entity(try rectangle_mesh(1, 1, 1), grid.world_from_point(Grid.Point{ .x = 1, .y = 2 }));
+    grid.entities[0] = try new_entity(try floor_tile_mesh(1, 1), grid.world_from_point(Grid.Point{ .x = 0, .y = 0 }));
+    grid.entities[1] = try new_entity(try rectangle_mesh(1, 1, 1), grid.world_from_point(Grid.Point{ .x = 0, .y = 1 }));
+
+    c.glEnable(c.GL_DEPTH_TEST);
+    // c.glEnable(c.GL_BLEND);
+    // c.glBlendFunc(c.GL_SRC_ALPHA, c.GL_ONE_MINUS_SRC_ALPHA);
 }
 
 pub fn main() !void {
