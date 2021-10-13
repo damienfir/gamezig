@@ -14,16 +14,25 @@ const GLBuffer = struct { vao: c.GLuint, shader: Shader, n_vertices: u32,
 // TODO: move color to mesh
 color: Vec3 };
 
-const Mesh = struct { vertices: []Vec3, normals: []Vec3 };
+const Mesh = struct { vertices: []Vec3, normals: []Vec3, color: Vec3 };
 
 const Entity = struct { gl_buffer: usize, mesh: usize, position: Vec3 };
 
 const Grid = struct {
     rows: u32,
     cols: u32,
+    start: u32,
+    end: u32,
     entities: []Entity,
 
-    const Point = struct { x: u32, y: u32 };
+    const Point = struct {
+        x: u32,
+        y: u32,
+
+        fn init(x: u32, y: u32) Point {
+            return Point{ .x = x, .y = y };
+        }
+    };
 
     fn init(rows: u32, cols: u32) !Grid {
         var self: Grid = undefined;
@@ -51,6 +60,78 @@ const Grid = struct {
         return self.index_from_point(Point{ .x = @floatToInt(u32, p.x), .y = @floatToInt(u32, p.y) });
     }
 };
+
+const CellType = enum { Floor, Start, End, HorizontalWall, VerticalWall, HorizontalHedge, VerticalHedge, Platform, RaisedPlatform };
+
+fn make_mesh_from_cell_type(cell: CellType) !Mesh {
+    switch (cell) {
+        CellType.Start, CellType.Floor => return try floor_tile_mesh(1, 1, Vec3.init(0.1, 0.8, 0.1)),
+        CellType.End => return try floor_tile_mesh(1, 1, Vec3.init(0.1, 0.4, 0.5)),
+        CellType.HorizontalWall => return try rectangle_mesh(1, 1, 0.2, Vec3.init(0.3, 0.3, 0.3)),
+        CellType.VerticalWall => return try rectangle_mesh(0.2, 1, 1, Vec3.init(0.3, 0.3, 0.3)),
+        CellType.HorizontalHedge => return try rectangle_mesh(1, 0.5, 0.2, Vec3.init(0.1, 0.5, 0.1)),
+        CellType.VerticalHedge => return try rectangle_mesh(0.2, 0.5, 1, Vec3.init(0.1, 0.5, 0.1)),
+        CellType.Platform => return try rectangle_mesh(1, 0.5, 1, Vec3.init(0.1, 0.1, 0.8)),
+        CellType.RaisedPlatform => return try rectangle_mesh(1, 1, 1, Vec3.init(0.1, 0.1, 0.8)),
+    }
+}
+
+fn streq(a: []const u8, b: []const u8) bool {
+    return std.mem.eql(u8, a, b);
+}
+
+fn make_grid_from_definition(def: []const u8, rows: u8) !Grid {
+    grid = try Grid.init(rows, @intCast(u32, def.len) / (rows * 2));
+    var si: u32 = 0;
+    var index: u32 = 0;
+    while (si < def.len) : (si += 2) {
+        if (def[si] == '\n') {
+            si -= 1;
+            continue;
+        }
+        const s = def[si .. si + 2];
+
+        var mesh: Mesh = undefined;
+        if (streq(s, "  ")) {
+            mesh = try make_mesh_from_cell_type(CellType.Floor);
+        } else if (streq(s, "==")) {
+            mesh = try make_mesh_from_cell_type(CellType.HorizontalWall);
+        } else if (streq(s, "||")) {
+            mesh = try make_mesh_from_cell_type(CellType.VerticalWall);
+        } else if (streq(s, "--")) {
+            mesh = try make_mesh_from_cell_type(CellType.HorizontalHedge);
+        } else if (streq(s, "| ")) {
+            mesh = try make_mesh_from_cell_type(CellType.VerticalHedge);
+        } else if (streq(s, "TT")) {
+            mesh = try make_mesh_from_cell_type(CellType.RaisedPlatform);
+        } else if (streq(s, "__")) {
+            mesh = try make_mesh_from_cell_type(CellType.Platform);
+        } else if (streq(s, "> ")) {
+            mesh = try make_mesh_from_cell_type(CellType.Start);
+            grid.start = index;
+        } else if (streq(s, " >")) {
+            mesh = try make_mesh_from_cell_type(CellType.End);
+            grid.end = index;
+        } else {
+            std.debug.panic("Unknown symbol: {s}", .{s});
+        }
+        const p = grid.point_from_index(index);
+        grid.entities[index] = try new_entity(mesh, grid.world_from_point(p));
+        std.debug.print("{}, {}, {}\n", .{ index, grid.entities[index].gl_buffer, grid.entities[index].mesh });
+        index += 1;
+    }
+    return grid;
+}
+
+fn grid1() !Grid {
+    const def =
+        \\>       TT    ||----
+        \\              ||   >
+        \\--------__----||----
+    ;
+
+    return make_grid_from_definition(def, 3);
+}
 
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 
@@ -81,7 +162,7 @@ fn compute_normals(vertices: []Vec3) ![]Vec3 {
     return normals;
 }
 
-fn floor_tile_mesh(width: f32, depth: f32) !Mesh {
+fn floor_tile_mesh(width: f32, depth: f32, color: Vec3) !Mesh {
     var mesh: Mesh = undefined;
     const x = width;
     const z = depth;
@@ -94,11 +175,11 @@ fn floor_tile_mesh(width: f32, depth: f32) !Mesh {
     mesh.vertices[5] = Vec3.init(x, 0, z);
 
     mesh.normals = try compute_normals(mesh.vertices);
-
+    mesh.color = color;
     return mesh;
 }
 
-fn rectangle_mesh(width: f32, height: f32, depth: f32) !Mesh {
+fn rectangle_mesh(width: f32, height: f32, depth: f32, color: Vec3) !Mesh {
     const v0 = Vec3.init(0, 0, depth);
     const v1 = Vec3.init(0, 0, 0);
     const v2 = Vec3.init(0, height, depth);
@@ -120,7 +201,7 @@ fn rectangle_mesh(width: f32, height: f32, depth: f32) !Mesh {
     }; // bottom
     std.mem.copy(Vec3, mesh.vertices, &faces);
     mesh.normals = try compute_normals(mesh.vertices);
-
+    mesh.color = color;
     return mesh;
 }
 
@@ -163,6 +244,7 @@ fn new_entity(mesh: Mesh, position: Vec3) !Entity {
 fn render_entities(entities: []Entity) void {
     const view = camera.get_view();
     for (entities) |entity| {
+        print(entity.gl_buffer);
         const buf = gl_buffers.items[entity.gl_buffer];
 
         // TODO: move shader out of structure, render all with same shader after grouping
@@ -172,9 +254,8 @@ fn render_entities(entities: []Entity) void {
         c.glBindVertexArray(buf.vao);
         defer c.glBindVertexArray(0);
 
-        const model = Mat4.translate(entity.position);
         try buf.shader.set_vec3("color", buf.color);
-        try buf.shader.set_mat4("model", model);
+        try buf.shader.set_mat4("model", Mat4.translate(entity.position));
         try buf.shader.set_mat4("projection", camera.projection);
         try buf.shader.set_mat4("view", view);
         // cast to i64 to make it signed (not i32, not enough bits), then truncate to c_int
@@ -317,9 +398,7 @@ fn print(x: anytype) void {
 fn init() !void {
     axes = try Axes.init();
 
-    grid = try Grid.init(1, 2);
-    grid.entities[0] = try new_entity(try floor_tile_mesh(1, 1), grid.world_from_point(Grid.Point{ .x = 0, .y = 0 }));
-    grid.entities[1] = try new_entity(try rectangle_mesh(1, 1, 1), grid.world_from_point(Grid.Point{ .x = 0, .y = 1 }));
+    grid = try grid1();
 
     c.glEnable(c.GL_DEPTH_TEST);
     // c.glEnable(c.GL_BLEND);
