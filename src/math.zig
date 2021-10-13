@@ -102,6 +102,14 @@ pub const Mat4 = struct {
         return mul(rot, trans);
     }
 
+    pub fn translate(t: Vec3) Mat4 {
+        var m = Mat4.eye();
+        m.data[3] = t.x;
+        m.data[7] = t.y;
+        m.data[11] = t.z;
+        return m;
+    }
+
     pub fn print(self: Mat4) void {
         std.debug.print("{d:.2} {d:.2} {d:.2} {d:.2}\n", .{ self.data[0], self.data[1], self.data[2], self.data[3] });
         std.debug.print("{d:.2} {d:.2} {d:.2} {d:.2}\n", .{ self.data[4], self.data[5], self.data[6], self.data[7] });

@@ -69,20 +69,21 @@ pub const Shader = struct {
         return Shader{ .program = program };
     }
 
-    pub fn use(self: *Shader) void {
+    pub fn use(self: Shader) void {
         c.glUseProgram(self.program);
     }
 
-    pub fn unuse(self: *Shader) void {
+    pub fn unuse(self: Shader) void {
         c.glUseProgram(0);
     }
 
-    pub fn set_vec3(self: *Shader, name: []const u8, vec: []const f32) !void {
+    pub fn set_vec3(self: Shader, name: []const u8, vec: Vec3) !void {
         const loc = try glGetUniformLocation(self.program, name);
-        c.glUniform3fv(loc, 1, vec.ptr);
+        // TODO: use 3fv with pointer to data
+        c.glUniform3f(loc, vec.x, vec.y, vec.z);
     }
 
-    pub fn set_mat4(self: *Shader, name: []const u8, mat: *const Mat4) !void {
+    pub fn set_mat4(self: Shader, name: []const u8, mat: Mat4) !void {
         const loc = try glGetUniformLocation(self.program, name);
         c.glUniformMatrix4fv(loc, 1, c.GL_TRUE, &mat.data);
     }
