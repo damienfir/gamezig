@@ -10,20 +10,24 @@ const Axes = @import("axes.zig").Axes;
 const Camera = @import("camera.zig").Camera;
 const Shader = @import("shader.zig").Shader;
 
-const GLBuffer = struct { vao: c.GLuint, shader: Shader, n_vertices: u32,
-// TODO: move color to mesh
-color: Vec3 };
-
-const Mesh = struct { vertices: []Vec3, normals: []Vec3, color: Vec3 };
-
-const Entity = struct { gl_buffer: usize, mesh: usize, position: Vec3 };
+const CellType = enum {
+    Floor,
+    Start,
+    End,
+    HorizontalWall,
+    VerticalWall,
+    HorizontalHedge,
+    VerticalHedge,
+    Platform,
+    RaisedPlatform,
+};
 
 const Grid = struct {
     rows: u32,
     cols: u32,
     start: u32,
     end: u32,
-    entities: []Entity,
+    cells: []CellType,
 
     const Point = struct {
         x: u32,
@@ -38,7 +42,7 @@ const Grid = struct {
         var self: Grid = undefined;
         self.rows = rows;
         self.cols = cols;
-        self.entities = try gpa.allocator.alloc(Entity, rows * cols);
+        self.cells = try gpa.allocator.alloc(CellType, rows * cols);
         return self;
     }
 
@@ -59,21 +63,68 @@ const Grid = struct {
     fn index_from_world(self: Grid, p: Vec3) u32 {
         return self.index_from_point(Point{ .x = @floatToInt(u32, p.x), .y = @floatToInt(u32, p.y) });
     }
+
+    fn render(self: Grid) void {
+        const view = camera.get_view();
+        for (self.cells) |celltype, i| {
+            const cell = cells[@enumToInt(celltype)];
+            const buf = gl_buffers.items[cell.glbuffer_id];
+
+            // TODO: move shader out of structure, render all with same shader after grouping
+            buf.shader.use();
+            defer buf.shader.unuse();
+
+            c.glBindVertexArray(buf.vao);
+            defer c.glBindVertexArray(0);
+
+            try buf.shader.set_vec3("color", cell.color);
+            const p = self.point_from_index(@intCast(u32, i));
+            try buf.shader.set_mat4("model", Mat4.translate(self.world_from_point(p)));
+            try buf.shader.set_mat4("projection", camera.projection);
+            try buf.shader.set_mat4("view", view);
+            c.glDrawArrays(c.GL_TRIANGLES, 0, @intCast(c_int, buf.n_vertices));
+        }
+    }
 };
 
-const CellType = enum { Floor, Start, End, HorizontalWall, VerticalWall, HorizontalHedge, VerticalHedge, Platform, RaisedPlatform };
-
-fn make_mesh_from_cell_type(cell: CellType) !Mesh {
-    switch (cell) {
-        CellType.Start, CellType.Floor => return try floor_tile_mesh(1, 1, Vec3.init(0.1, 0.8, 0.1)),
-        CellType.End => return try floor_tile_mesh(1, 1, Vec3.init(0.1, 0.4, 0.5)),
-        CellType.HorizontalWall => return try rectangle_mesh(1, 1, 0.2, Vec3.init(0.3, 0.3, 0.3)),
-        CellType.VerticalWall => return try rectangle_mesh(0.2, 1, 1, Vec3.init(0.3, 0.3, 0.3)),
-        CellType.HorizontalHedge => return try rectangle_mesh(1, 0.5, 0.2, Vec3.init(0.1, 0.5, 0.1)),
-        CellType.VerticalHedge => return try rectangle_mesh(0.2, 0.5, 1, Vec3.init(0.1, 0.5, 0.1)),
-        CellType.Platform => return try rectangle_mesh(1, 0.5, 1, Vec3.init(0.1, 0.1, 0.8)),
-        CellType.RaisedPlatform => return try rectangle_mesh(1, 1, 1, Vec3.init(0.1, 0.1, 0.8)),
+fn make_all_cells() !void {
+    const floor_mesh = try floor_tile_mesh(1, 1);
+    {
+        try new_cell(CellType.Start, floor_mesh, Vec3.init(0.1, 0.8, 0.1));
+        try new_cell(CellType.Floor, floor_mesh, Vec3.init(0.1, 0.8, 0.1));
+        try new_cell(CellType.End, floor_mesh, Vec3.init(0.1, 0.4, 0.5));
     }
+
+    {
+        var wall_mesh = try rectangle_mesh(1, 1, 0.2);
+        translate_mesh(&wall_mesh, Vec3.init(0, 0, 0.4));
+        const mesh = try merge_meshes(floor_mesh, wall_mesh);
+        try new_cell(CellType.HorizontalWall, mesh, Vec3.init(0.3, 0.3, 0.3));
+    }
+
+    {
+        var wall_mesh = try rectangle_mesh(0.2, 1, 1);
+        translate_mesh(&wall_mesh, Vec3.init(0.4, 0, 0));
+        const mesh = try merge_meshes(floor_mesh, wall_mesh);
+        try new_cell(CellType.VerticalWall, mesh, Vec3.init(0.3, 0.3, 0.3));
+    }
+
+    {
+        var hedge_mesh = try rectangle_mesh(1, 0.5, 0.2);
+        translate_mesh(&hedge_mesh, Vec3.init(0, 0, 0.4));
+        const mesh = try merge_meshes(floor_mesh, hedge_mesh);
+        try new_cell(CellType.HorizontalHedge, mesh, Vec3.init(0.1, 0.5, 0.1));
+    }
+
+    {
+        var hedge_mesh = try rectangle_mesh(0.2, 0.5, 1);
+        translate_mesh(&hedge_mesh, Vec3.init(0.4, 0, 0));
+        const mesh = try merge_meshes(floor_mesh, hedge_mesh);
+        try new_cell(CellType.VerticalHedge, mesh, Vec3.init(0.1, 0.5, 0.1));
+    }
+
+    try new_cell(CellType.Platform, try rectangle_mesh(1, 0.5, 1), Vec3.init(0.1, 0.1, 0.8));
+    try new_cell(CellType.RaisedPlatform, try rectangle_mesh(1, 1, 1), Vec3.init(0.1, 0.1, 0.8));
 }
 
 fn streq(a: []const u8, b: []const u8) bool {
@@ -91,33 +142,29 @@ fn make_grid_from_definition(def: []const u8, rows: u8) !Grid {
         }
         const s = def[si .. si + 2];
 
-        var mesh: Mesh = undefined;
         if (streq(s, "  ")) {
-            mesh = try make_mesh_from_cell_type(CellType.Floor);
+            grid.cells[index] = CellType.Floor;
         } else if (streq(s, "==")) {
-            mesh = try make_mesh_from_cell_type(CellType.HorizontalWall);
+            grid.cells[index] = CellType.HorizontalWall;
         } else if (streq(s, "||")) {
-            mesh = try make_mesh_from_cell_type(CellType.VerticalWall);
+            grid.cells[index] = CellType.VerticalWall;
         } else if (streq(s, "--")) {
-            mesh = try make_mesh_from_cell_type(CellType.HorizontalHedge);
+            grid.cells[index] = CellType.HorizontalHedge;
         } else if (streq(s, "| ")) {
-            mesh = try make_mesh_from_cell_type(CellType.VerticalHedge);
+            grid.cells[index] = CellType.VerticalHedge;
         } else if (streq(s, "TT")) {
-            mesh = try make_mesh_from_cell_type(CellType.RaisedPlatform);
+            grid.cells[index] = CellType.RaisedPlatform;
         } else if (streq(s, "__")) {
-            mesh = try make_mesh_from_cell_type(CellType.Platform);
+            grid.cells[index] = CellType.Platform;
         } else if (streq(s, "> ")) {
-            mesh = try make_mesh_from_cell_type(CellType.Start);
+            grid.cells[index] = CellType.Start;
             grid.start = index;
         } else if (streq(s, " >")) {
-            mesh = try make_mesh_from_cell_type(CellType.End);
+            grid.cells[index] = CellType.End;
             grid.end = index;
         } else {
             std.debug.panic("Unknown symbol: {s}", .{s});
         }
-        const p = grid.point_from_index(index);
-        grid.entities[index] = try new_entity(mesh, grid.world_from_point(p));
-        std.debug.print("{}, {}, {}\n", .{ index, grid.entities[index].gl_buffer, grid.entities[index].mesh });
         index += 1;
     }
     return grid;
@@ -135,13 +182,38 @@ fn grid1() !Grid {
 
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 
-var meshes = std.ArrayList(Mesh).init(&gpa.allocator);
-var gl_buffers = std.ArrayList(GLBuffer).init(&gpa.allocator);
+const GLBuffer = struct {
+    vao: c.GLuint,
+    shader: Shader,
+    n_vertices: u32,
+};
 
-const Controls = struct { move_forwards: bool, move_backwards: bool, move_left: bool, move_right: bool, dx: f32, dy: f32 };
+const Mesh = struct {
+    vertices: []Vec3,
+    normals: []Vec3,
+};
+
+const Cell = struct {
+    mesh_id: u32,
+    glbuffer_id: u32,
+    color: Vec3,
+};
+
+const Controls = struct {
+    move_forwards: bool,
+    move_backwards: bool,
+    move_left: bool,
+    move_right: bool,
+    dx: f32,
+    dy: f32,
+};
+
 var controls: Controls = undefined;
 var camera = Camera.init(window_ratio);
 var axes: Axes = undefined;
+var meshes = std.ArrayList(Mesh).init(&gpa.allocator);
+var gl_buffers = std.ArrayList(GLBuffer).init(&gpa.allocator);
+var cells: [@typeInfo(CellType).Enum.fields.len]Cell = undefined;
 var grid: Grid = undefined;
 
 fn normal_for_face(vertices: [*]Vec3) Vec3 {
@@ -162,7 +234,7 @@ fn compute_normals(vertices: []Vec3) ![]Vec3 {
     return normals;
 }
 
-fn floor_tile_mesh(width: f32, depth: f32, color: Vec3) !Mesh {
+fn floor_tile_mesh(width: f32, depth: f32) !Mesh {
     var mesh: Mesh = undefined;
     const x = width;
     const z = depth;
@@ -175,11 +247,10 @@ fn floor_tile_mesh(width: f32, depth: f32, color: Vec3) !Mesh {
     mesh.vertices[5] = Vec3.init(x, 0, z);
 
     mesh.normals = try compute_normals(mesh.vertices);
-    mesh.color = color;
     return mesh;
 }
 
-fn rectangle_mesh(width: f32, height: f32, depth: f32, color: Vec3) !Mesh {
+fn rectangle_mesh(width: f32, height: f32, depth: f32) !Mesh {
     const v0 = Vec3.init(0, 0, depth);
     const v1 = Vec3.init(0, 0, 0);
     const v2 = Vec3.init(0, height, depth);
@@ -201,14 +272,26 @@ fn rectangle_mesh(width: f32, height: f32, depth: f32, color: Vec3) !Mesh {
     }; // bottom
     std.mem.copy(Vec3, mesh.vertices, &faces);
     mesh.normals = try compute_normals(mesh.vertices);
-    mesh.color = color;
     return mesh;
+}
+
+fn translate_mesh(mesh: *Mesh, t: Vec3) void {
+    const T = Mat4.translate(t);
+    for (mesh.vertices) |*v| {
+        v.* = T.mulvec3(v.*);
+    }
+}
+
+fn merge_meshes(a: Mesh, b: Mesh) !Mesh {
+    var new: Mesh = undefined;
+    new.vertices = try std.mem.concat(&gpa.allocator, Vec3, &[_][]Vec3{ a.vertices, b.vertices });
+    new.normals = try std.mem.concat(&gpa.allocator, Vec3, &[_][]Vec3{ a.normals, b.normals });
+    return new;
 }
 
 fn gl_buffer_from_mesh(mesh: Mesh) !GLBuffer {
     var buf: GLBuffer = undefined;
     buf.n_vertices = @intCast(u32, mesh.vertices.len);
-    buf.color = Vec3.init(1, 0, 0);
     buf.shader = try Shader.init("shaders/phong_vertex.glsl", "shaders/phong_fragment.glsl");
 
     var data = try gpa.allocator.alloc(Vec3, 2 * mesh.vertices.len);
@@ -233,18 +316,19 @@ fn gl_buffer_from_mesh(mesh: Mesh) !GLBuffer {
     return buf;
 }
 
-fn new_entity(mesh: Mesh, position: Vec3) !Entity {
+fn new_cell(celltype: CellType, mesh: Mesh, color: Vec3) !void {
     try meshes.append(mesh);
-    const mesh_id = meshes.items.len - 1;
+    const mesh_id = @intCast(u32, meshes.items.len - 1);
     try gl_buffers.append(try gl_buffer_from_mesh(mesh));
-    const buf_id = gl_buffers.items.len - 1;
-    return Entity{ .gl_buffer = buf_id, .mesh = mesh_id, .position = position };
+    const buf_id = @intCast(u32, gl_buffers.items.len - 1);
+    const cells_index = @enumToInt(celltype);
+    const cell = Cell{ .mesh_id = mesh_id, .glbuffer_id = buf_id, .color = color };
+    cells[@enumToInt(celltype)] = cell;
 }
 
 fn render_entities(entities: []Entity) void {
     const view = camera.get_view();
     for (entities) |entity| {
-        print(entity.gl_buffer);
         const buf = gl_buffers.items[entity.gl_buffer];
 
         // TODO: move shader out of structure, render all with same shader after grouping
@@ -275,8 +359,7 @@ fn draw() void {
     c.glClearColor(0, 0, 0, 0);
     c.glClear(c.GL_COLOR_BUFFER_BIT | c.GL_DEPTH_BUFFER_BIT);
     axes.draw(camera);
-
-    render_entities(grid.entities);
+    grid.render();
 
     draw_cursor();
 }
@@ -398,6 +481,7 @@ fn print(x: anytype) void {
 fn init() !void {
     axes = try Axes.init();
 
+    try make_all_cells();
     grid = try grid1();
 
     c.glEnable(c.GL_DEPTH_TEST);

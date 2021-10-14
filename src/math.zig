@@ -144,6 +144,13 @@ pub const Mat4 = struct {
 
         return C;
     }
+
+    pub fn mulvec3(M: Mat4, v: Vec3) Vec3 {
+        const x = M.data[0] * v.x + M.data[1] * v.y + M.data[2] * v.z + M.data[3];
+        const y = M.data[4] * v.x + M.data[5] * v.y + M.data[6] * v.z + M.data[7];
+        const z = M.data[8] * v.x + M.data[9] * v.y + M.data[10] * v.z + M.data[11];
+        return Vec3.init(x, y, z);
+    }
 };
 
 test "matrix multiplication" {
