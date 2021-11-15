@@ -10,7 +10,13 @@ pub const Camera = struct {
     speed: f32,
 
     pub fn init(ratio: f32) Camera {
-        return Camera{ .projection = Mat4.perpective(0.1, 100.0, 0.05, 0.05 / ratio), .position = Vec3.init(1, 4, 10), .direction = Vec3.init(-0, -0.2, -1).normalize(), .up = Vec3.init(0, 1, 0), .speed = 5 };
+        return Camera{
+            .projection = Mat4.perpective(0.1, 100.0, 0.05, 0.05 / ratio),
+            .position = Vec3.init(1, 1, 3),
+            .direction = Vec3.init(0, 0, -1).normalize(),
+            .up = Vec3.init(0, 1, 0),
+            .speed = 5,
+        };
     }
 
     pub fn get_view(self: Camera) Mat4 {

@@ -10,175 +10,36 @@ const Axes = @import("axes.zig").Axes;
 const Camera = @import("camera.zig").Camera;
 const Shader = @import("shader.zig").Shader;
 
-const CellType = enum {
-    Floor,
-    Start,
-    End,
-    HorizontalWall,
-    VerticalWall,
-    HorizontalHedge,
-    VerticalHedge,
-    Platform,
-    RaisedPlatform,
-};
+fn render_buffers() void {
+    const view = camera.get_view();
+    pieces.items[0].gl_buffer.shader.use();
+    defer pieces.items[0].gl_buffer.shader.unuse();
+    for (pieces.items) |piece| {
+        const buf = piece.gl_buffer;
+        // TODO: move shader out of structure, render all with same shader after grouping
+        // buf.shader.use();
+        // defer buf.shader.unuse();
 
-const Grid = struct {
-    rows: u32,
-    cols: u32,
-    start: u32,
-    end: u32,
-    cells: []CellType,
+        c.glBindVertexArray(buf.vao);
+        defer c.glBindVertexArray(0);
 
-    const Point = struct {
-        x: u32,
-        y: u32,
+        const transform = Mat4.rotation_y(piece.rotation).mul(Mat4.translation(piece.position));
 
-        fn init(x: u32, y: u32) Point {
-            return Point{ .x = x, .y = y };
-        }
-    };
-
-    fn init(rows: u32, cols: u32) !Grid {
-        var self: Grid = undefined;
-        self.rows = rows;
-        self.cols = cols;
-        self.cells = try gpa.allocator.alloc(CellType, rows * cols);
-        return self;
+        try buf.shader.set_vec3("color", piece.color);
+        try buf.shader.set_mat4("model", transform);
+        try buf.shader.set_mat4("projection", camera.projection);
+        try buf.shader.set_mat4("view", view);
+        c.glDrawArrays(c.GL_TRIANGLES, 0, @intCast(c_int, buf.n_vertices));
     }
+}
 
-    fn index_from_point(self: Grid, p: Point) u32 {
-        return p.y * self.cols + p.x;
-    }
+const RPM = struct {
+    value: f32,
 
-    fn point_from_index(self: Grid, index: u32) Point {
-        return Point{ .x = index % self.cols, .y = index / self.cols };
-    }
-
-    fn world_from_point(self: Grid, p: Point) Vec3 {
-        const x = @intToFloat(f32, p.x);
-        const y = @intToFloat(f32, p.y);
-        return Vec3{ .x = x, .y = 0, .z = y };
-    }
-
-    fn index_from_world(self: Grid, p: Vec3) u32 {
-        return self.index_from_point(Point{ .x = @floatToInt(u32, p.x), .y = @floatToInt(u32, p.y) });
-    }
-
-    fn render(self: Grid) void {
-        const view = camera.get_view();
-        for (self.cells) |celltype, i| {
-            const cell = cells[@enumToInt(celltype)];
-            const buf = gl_buffers.items[cell.glbuffer_id];
-
-            // TODO: move shader out of structure, render all with same shader after grouping
-            buf.shader.use();
-            defer buf.shader.unuse();
-
-            c.glBindVertexArray(buf.vao);
-            defer c.glBindVertexArray(0);
-
-            try buf.shader.set_vec3("color", cell.color);
-            const p = self.point_from_index(@intCast(u32, i));
-            try buf.shader.set_mat4("model", Mat4.translate(self.world_from_point(p)));
-            try buf.shader.set_mat4("projection", camera.projection);
-            try buf.shader.set_mat4("view", view);
-            c.glDrawArrays(c.GL_TRIANGLES, 0, @intCast(c_int, buf.n_vertices));
-        }
+    pub fn set(v: f32) RPM {
+        return RPM{ .value = v };
     }
 };
-
-fn make_all_cells() !void {
-    const floor_mesh = try floor_tile_mesh(1, 1);
-    {
-        try new_cell(CellType.Start, floor_mesh, Vec3.init(0.1, 0.8, 0.1));
-        try new_cell(CellType.Floor, floor_mesh, Vec3.init(0.1, 0.8, 0.1));
-        try new_cell(CellType.End, floor_mesh, Vec3.init(0.1, 0.4, 0.5));
-    }
-
-    {
-        var wall_mesh = try rectangle_mesh(1, 1, 0.2);
-        translate_mesh(&wall_mesh, Vec3.init(0, 0, 0.4));
-        const mesh = try merge_meshes(floor_mesh, wall_mesh);
-        try new_cell(CellType.HorizontalWall, mesh, Vec3.init(0.3, 0.3, 0.3));
-    }
-
-    {
-        var wall_mesh = try rectangle_mesh(0.2, 1, 1);
-        translate_mesh(&wall_mesh, Vec3.init(0.4, 0, 0));
-        const mesh = try merge_meshes(floor_mesh, wall_mesh);
-        try new_cell(CellType.VerticalWall, mesh, Vec3.init(0.3, 0.3, 0.3));
-    }
-
-    {
-        var hedge_mesh = try rectangle_mesh(1, 0.5, 0.2);
-        translate_mesh(&hedge_mesh, Vec3.init(0, 0, 0.4));
-        const mesh = try merge_meshes(floor_mesh, hedge_mesh);
-        try new_cell(CellType.HorizontalHedge, mesh, Vec3.init(0.1, 0.5, 0.1));
-    }
-
-    {
-        var hedge_mesh = try rectangle_mesh(0.2, 0.5, 1);
-        translate_mesh(&hedge_mesh, Vec3.init(0.4, 0, 0));
-        const mesh = try merge_meshes(floor_mesh, hedge_mesh);
-        try new_cell(CellType.VerticalHedge, mesh, Vec3.init(0.1, 0.5, 0.1));
-    }
-
-    try new_cell(CellType.Platform, try rectangle_mesh(1, 0.5, 1), Vec3.init(0.1, 0.1, 0.8));
-    try new_cell(CellType.RaisedPlatform, try rectangle_mesh(1, 1, 1), Vec3.init(0.1, 0.1, 0.8));
-}
-
-fn streq(a: []const u8, b: []const u8) bool {
-    return std.mem.eql(u8, a, b);
-}
-
-fn make_grid_from_definition(def: []const u8, rows: u8) !Grid {
-    grid = try Grid.init(rows, @intCast(u32, def.len) / (rows * 2));
-    var si: u32 = 0;
-    var index: u32 = 0;
-    while (si < def.len) : (si += 2) {
-        if (def[si] == '\n') {
-            si -= 1;
-            continue;
-        }
-        const s = def[si .. si + 2];
-
-        if (streq(s, "  ")) {
-            grid.cells[index] = CellType.Floor;
-        } else if (streq(s, "==")) {
-            grid.cells[index] = CellType.HorizontalWall;
-        } else if (streq(s, "||")) {
-            grid.cells[index] = CellType.VerticalWall;
-        } else if (streq(s, "--")) {
-            grid.cells[index] = CellType.HorizontalHedge;
-        } else if (streq(s, "| ")) {
-            grid.cells[index] = CellType.VerticalHedge;
-        } else if (streq(s, "TT")) {
-            grid.cells[index] = CellType.RaisedPlatform;
-        } else if (streq(s, "__")) {
-            grid.cells[index] = CellType.Platform;
-        } else if (streq(s, "> ")) {
-            grid.cells[index] = CellType.Start;
-            grid.start = index;
-        } else if (streq(s, " >")) {
-            grid.cells[index] = CellType.End;
-            grid.end = index;
-        } else {
-            std.debug.panic("Unknown symbol: {s}", .{s});
-        }
-        index += 1;
-    }
-    return grid;
-}
-
-fn grid1() !Grid {
-    const def =
-        \\>       TT    ||----
-        \\              ||   >
-        \\--------__----||----
-    ;
-
-    return make_grid_from_definition(def, 3);
-}
 
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 
@@ -193,9 +54,12 @@ const Mesh = struct {
     normals: []Vec3,
 };
 
-const Cell = struct {
-    mesh_id: u32,
-    glbuffer_id: u32,
+const Piece = struct {
+    mesh: Mesh,
+    gl_buffer: GLBuffer,
+    rotation: f32,
+    rotation_speed: RPM,
+    position: Vec3,
     color: Vec3,
 };
 
@@ -211,10 +75,7 @@ const Controls = struct {
 var controls: Controls = undefined;
 var camera = Camera.init(window_ratio);
 var axes: Axes = undefined;
-var meshes = std.ArrayList(Mesh).init(&gpa.allocator);
-var gl_buffers = std.ArrayList(GLBuffer).init(&gpa.allocator);
-var cells: [@typeInfo(CellType).Enum.fields.len]Cell = undefined;
-var grid: Grid = undefined;
+var pieces = std.ArrayList(Piece).init(&gpa.allocator);
 
 fn normal_for_face(vertices: [*]Vec3) Vec3 {
     const v = vertices[1].sub(vertices[0]);
@@ -234,59 +95,41 @@ fn compute_normals(vertices: []Vec3) ![]Vec3 {
     return normals;
 }
 
-fn floor_tile_mesh(width: f32, depth: f32) !Mesh {
+fn polygon_piece(radius: f32, thickness: f32, n_sides: u32) !Mesh {
+    var i: u32 = 0;
     var mesh: Mesh = undefined;
-    const x = width;
-    const z = depth;
-    mesh.vertices = try gpa.allocator.alloc(Vec3, 6);
-    mesh.vertices[0] = Vec3.init(0, 0, 0);
-    mesh.vertices[1] = Vec3.init(x, 0, 0);
-    mesh.vertices[2] = Vec3.init(0, 0, z);
-    mesh.vertices[3] = Vec3.init(0, 0, z);
-    mesh.vertices[4] = Vec3.init(x, 0, 0);
-    mesh.vertices[5] = Vec3.init(x, 0, z);
+    const stride = 3 * 4;
+    mesh.vertices = try gpa.allocator.alloc(Vec3, n_sides * stride);
+    while (i < n_sides) : (i += 1) {
+        const angle_a = @intToFloat(f32, i) * 2.0 * std.math.pi / @intToFloat(f32, n_sides);
+        const angle_b = @intToFloat(f32, i + 1) * 2.0 * std.math.pi / @intToFloat(f32, n_sides);
 
-    mesh.normals = try compute_normals(mesh.vertices);
-    return mesh;
-}
+        const bottom_a = Vec3.init(radius * @cos(angle_a), 0, radius * @sin(angle_a));
+        const bottom_b = Vec3.init(radius * @cos(angle_b), 0, radius * @sin(angle_b));
+        const bottom_c = Vec3.init(0, 0, 0);
 
-fn rectangle_mesh(width: f32, height: f32, depth: f32) !Mesh {
-    const v0 = Vec3.init(0, 0, depth);
-    const v1 = Vec3.init(0, 0, 0);
-    const v2 = Vec3.init(0, height, depth);
-    const v3 = Vec3.init(0, height, 0);
-    const v4 = Vec3.init(width, 0, depth);
-    const v5 = Vec3.init(width, 0, 0);
-    const v6 = Vec3.init(width, height, depth);
-    const v7 = Vec3.init(width, height, 0);
+        const top_a = bottom_a.add(Vec3.init(0, thickness, 0));
+        const top_b = bottom_b.add(Vec3.init(0, thickness, 0));
+        const top_c = bottom_c.add(Vec3.init(0, thickness, 0));
 
-    var mesh: Mesh = undefined;
-    mesh.vertices = try gpa.allocator.alloc(Vec3, 36);
-    const faces = [_]Vec3{
-        v0, v2, v1, v2, v3, v1, // left
-        v1, v3, v5, v5, v3, v7, // back
-        v5, v7, v6, v6, v4, v5, // right
-        v4, v6, v2, v2, v0, v4, // front
-        v2, v6, v3, v3, v6, v7, // top
-        v0, v1, v4, v4, v1, v5,
-    }; // bottom
-    std.mem.copy(Vec3, mesh.vertices, &faces);
-    mesh.normals = try compute_normals(mesh.vertices);
-    return mesh;
-}
+        mesh.vertices[i * stride + 0] = bottom_a;
+        mesh.vertices[i * stride + 1] = bottom_b;
+        mesh.vertices[i * stride + 2] = bottom_c;
 
-fn translate_mesh(mesh: *Mesh, t: Vec3) void {
-    const T = Mat4.translate(t);
-    for (mesh.vertices) |*v| {
-        v.* = T.mulvec3(v.*);
+        mesh.vertices[i * stride + 3] = top_a;
+        mesh.vertices[i * stride + 4] = top_c;
+        mesh.vertices[i * stride + 5] = top_b;
+
+        mesh.vertices[i * stride + 6] = bottom_a;
+        mesh.vertices[i * stride + 7] = top_b;
+        mesh.vertices[i * stride + 8] = top_a;
+
+        mesh.vertices[i * stride + 9] = bottom_a;
+        mesh.vertices[i * stride + 10] = bottom_b;
+        mesh.vertices[i * stride + 11] = top_b;
     }
-}
-
-fn merge_meshes(a: Mesh, b: Mesh) !Mesh {
-    var new: Mesh = undefined;
-    new.vertices = try std.mem.concat(&gpa.allocator, Vec3, &[_][]Vec3{ a.vertices, b.vertices });
-    new.normals = try std.mem.concat(&gpa.allocator, Vec3, &[_][]Vec3{ a.normals, b.normals });
-    return new;
+    mesh.normals = try compute_normals(mesh.vertices);
+    return mesh;
 }
 
 fn gl_buffer_from_mesh(mesh: Mesh) !GLBuffer {
@@ -316,55 +159,14 @@ fn gl_buffer_from_mesh(mesh: Mesh) !GLBuffer {
     return buf;
 }
 
-fn new_cell(celltype: CellType, mesh: Mesh, color: Vec3) !void {
-    try meshes.append(mesh);
-    const mesh_id = @intCast(u32, meshes.items.len - 1);
-    try gl_buffers.append(try gl_buffer_from_mesh(mesh));
-    const buf_id = @intCast(u32, gl_buffers.items.len - 1);
-    const cells_index = @enumToInt(celltype);
-    const cell = Cell{ .mesh_id = mesh_id, .glbuffer_id = buf_id, .color = color };
-    cells[@enumToInt(celltype)] = cell;
-}
-
-fn render_entities(entities: []Entity) void {
-    const view = camera.get_view();
-    for (entities) |entity| {
-        const buf = gl_buffers.items[entity.gl_buffer];
-
-        // TODO: move shader out of structure, render all with same shader after grouping
-        buf.shader.use();
-        defer buf.shader.unuse();
-
-        c.glBindVertexArray(buf.vao);
-        defer c.glBindVertexArray(0);
-
-        try buf.shader.set_vec3("color", buf.color);
-        try buf.shader.set_mat4("model", Mat4.translate(entity.position));
-        try buf.shader.set_mat4("projection", camera.projection);
-        try buf.shader.set_mat4("view", view);
-        // cast to i64 to make it signed (not i32, not enough bits), then truncate to c_int
-        c.glDrawArrays(c.GL_TRIANGLES, 0, @truncate(c_int, @intCast(i64, buf.n_vertices)));
-    }
-}
-
-fn draw_cursor() void {
-    c.glPointSize(5);
-    c.glBegin(c.GL_POINTS);
-    c.glColor3d(1, 1, 1);
-    c.glVertex3d(0, 0, 0);
-    c.glEnd();
-}
-
 fn draw() void {
     c.glClearColor(0, 0, 0, 0);
     c.glClear(c.GL_COLOR_BUFFER_BIT | c.GL_DEPTH_BUFFER_BIT);
-    axes.draw(camera);
-    grid.render();
-
-    draw_cursor();
+    // axes.draw(camera);
+    render_buffers();
 }
 
-fn update(dt: f32) void {
+fn update_camera(dt: f32) void {
     var velocity = Vec3.init(0, 0, 0);
     if (controls.move_forwards) {
         velocity = velocity.add(camera.direction);
@@ -387,11 +189,7 @@ fn update(dt: f32) void {
     controls.dy = 0;
 }
 
-fn glfw_key_callback(window: ?*c.GLFWwindow, key: c_int, scancode: c_int, action: c_int, mods: c_int) callconv(.C) void {
-    if (key == c.GLFW_KEY_ESCAPE and action == c.GLFW_PRESS) {
-        c.glfwSetWindowShouldClose(window, 1);
-    }
-
+fn keyboard_camera(key: c_int, action: c_int) void {
     if (key == c.GLFW_KEY_W) {
         if (action == c.GLFW_PRESS) {
             controls.move_backwards = false;
@@ -429,10 +227,6 @@ fn glfw_key_callback(window: ?*c.GLFWwindow, key: c_int, scancode: c_int, action
     }
 }
 
-fn Pair(comptime T: type) type {
-    return struct { a: T, b: T };
-}
-
 const Delta = struct {
     prev_x: f32,
     prev_y: f32,
@@ -456,18 +250,42 @@ const Delta = struct {
     }
 };
 
-var mouse_throttle: std.time.Timer = undefined;
 var mouse_delta = Delta.init();
 
+fn mouse_camera(xpos: f64, ypos: f64) void {
+    const delta = mouse_delta.get_delta(@floatCast(f32, xpos), @floatCast(f32, ypos));
+    controls.dx = delta.a;
+    controls.dy = -delta.b;
+}
+
+fn update(dt: f32) void {
+    for (pieces.items) |*piece| {
+        piece.*.rotation += piece.rotation_speed.value * dt;
+    }
+
+    update_camera(dt);
+}
+
+fn glfw_key_callback(window: ?*c.GLFWwindow, key: c_int, scancode: c_int, action: c_int, mods: c_int) callconv(.C) void {
+    if (key == c.GLFW_KEY_ESCAPE and action == c.GLFW_PRESS) {
+        c.glfwSetWindowShouldClose(window, 1);
+    }
+
+    keyboard_camera(key, action);
+}
+
+fn Pair(comptime T: type) type {
+    return struct { a: T, b: T };
+}
+
+var mouse_throttle: std.time.Timer = undefined;
 fn glfw_cursor_callback(window: ?*c.GLFWwindow, xpos: f64, ypos: f64) callconv(.C) void {
     if (mouse_throttle.read() < @floatToInt(u64, (1.0 / 60.0) * 1e9)) {
         return;
     }
     mouse_throttle.reset();
 
-    const delta = mouse_delta.get_delta(@floatCast(f32, xpos), @floatCast(f32, ypos));
-    controls.dx = delta.a;
-    controls.dy = -delta.b;
+    mouse_camera(xpos, ypos);
 }
 
 const window_width = 1920;
@@ -481,8 +299,27 @@ fn print(x: anytype) void {
 fn init() !void {
     axes = try Axes.init();
 
-    try make_all_cells();
-    grid = try grid1();
+    const mesh = try polygon_piece(1, 0.1, 15);
+    const piece = Piece{
+        .mesh = mesh,
+        .gl_buffer = try gl_buffer_from_mesh(mesh),
+        .rotation = 0,
+        .rotation_speed = RPM.set(0.4),
+        .position = Vec3.init(0, 0, 0),
+        .color = Vec3.init(1.0, 1.0, 1.0),
+    };
+    try pieces.append(piece);
+
+    const mesh1 = try polygon_piece(0.5, 0.05, 9);
+    const piece1 = Piece{
+        .mesh = mesh1,
+        .gl_buffer = try gl_buffer_from_mesh(mesh1),
+        .rotation = 0,
+        .rotation_speed = RPM.set(-0.4),
+        .position = Vec3.init(0, 0.1, 0),
+        .color = Vec3.init(0.7, 0.3, 0.1),
+    };
+    try pieces.append(piece1);
 
     c.glEnable(c.GL_DEPTH_TEST);
     // c.glEnable(c.GL_BLEND);

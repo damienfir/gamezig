@@ -151,6 +151,23 @@ pub const Mat4 = struct {
         const z = M.data[8] * v.x + M.data[9] * v.y + M.data[10] * v.z + M.data[11];
         return Vec3.init(x, y, z);
     }
+
+    pub fn rotation_y(rot: f32) Mat4 {
+        var m = Mat4.eye();
+        m.data[0] = @cos(rot);
+        m.data[2] = -@sin(rot);
+        m.data[8] = @sin(rot);
+        m.data[10] = @cos(rot);
+        return m;
+    }
+
+    pub fn translation(v: Vec3) Mat4 {
+        var m = Mat4.eye();
+        m.data[3] = v.x;
+        m.data[7] = v.y;
+        m.data[11] = v.z;
+        return m;
+    }
 };
 
 test "matrix multiplication" {
